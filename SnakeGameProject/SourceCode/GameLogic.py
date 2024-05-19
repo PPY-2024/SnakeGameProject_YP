@@ -1,16 +1,20 @@
-from Snake import Snake
-from Board import Board
+import time
+from SourceCode.Snake import Snake
+from SourceCode.Board import Board
+from SourceCode.mongodb import store_game_result
+from SourceCode.mongodb import store_game_result_to_mongodb
 import random
-
-
 class GameLogic:
-    def __init__(self, width, height):
+    def __init__(self, width, height, nickname):
         self.width = width
         self.height = height
+        self.nickname = nickname  # Initialize the nickname
+        self.score = 0  # Initialize the score to 0
         self.snake = Snake(width // 2, height // 2)
         self.board = Board(width, height)
         self.food = self.generate_food()
         self.obstacles = self.generate_obstacles()  # Generate obstacles
+        self.update_board()
         self.speed = 1.0  # Initial speed (1 square per second)
         self.total_cells = self.width * self.height
         self.total_obstacles = sum(len(obstacle) for obstacle in self.obstacles)
@@ -19,23 +23,41 @@ class GameLogic:
         self.endgame_text = "Congratulations! You have won the game." if self.win_bool else "Game Over!"
         self.game_over = False
 
+    # TODO: Change it so the player name will be passed in another method
     def get_state(self):
-        return {
-            'snake': self.snake.body,
-            'food': self.food,
-            'obstacles': self.obstacles,
+        state = {
+            'board': [],
+            'nickname': self.nickname,  # Include the nickname in the game state
+            'score': self.score,  # Include the score in the game state
+            'speed': self.speed,  # Include the speed in the game state
+            'snake_direction': self.snake.direction,  # Include the direction of the snake
             'game_over': self.game_over,
-            'win': self.win_bool,
+            'endgame_text': self.endgame_text  # Include the endgame_text in the game state
         }
+        for row in self.board.grid:
+            state_row = []
+            for cell in row:
+                if cell == ' ':
+                    state_row.append(' ')
+                elif cell == 'H':
+                    state_row.append('H')
+                elif cell == 'B':
+                    state_row.append('B')
+                elif cell == 'F':
+                    state_row.append('F')
+                elif cell == 'O':
+                    state_row.append('O')
+
+            state['board'].append(state_row)
+        return state
 
     def generate_food(self):
-        incorrect_position = True
-        while incorrect_position:
-            x = random.randint(0, self.width - 1)
-            y = random.randint(0, self.height - 1)
-            if (y, x) not in self.snake.body and (y, x) not in self.board.obstacles:
-                incorrect_position = False
-                return y, x
+        free_spaces = [(y, x) for y in range(self.height) for x in range(self.width)
+                       if (y, x) not in self.snake.body and (y, x) not in self.board.obstacles]
+        if free_spaces:
+            return random.choice(free_spaces)
+        else:
+            return None  # No free space available, return None
 
     def generate_obstacles(self):
         obstacle = []
@@ -50,11 +72,13 @@ class GameLogic:
             if self.width >= 10 and self.height >= 10:
                 obstacle_num = 2
             if self.width >= 15 and self.height >= 15:
-                obstacle_num = 3
-            if self.width >= 18 and self.height >= 15:
                 obstacle_num = 4
+            if self.width >= 18 and self.height >= 15:
+                obstacle_num = 7
             if self.width == 25 and self.height == 25:
-                obstacle_num = 5  # Adjust according to width
+                obstacle_num = 10  # Adjust according to width
+
+            middle_row = self.height // 2  # Find the middle row
 
             for _ in range(obstacle_num):
                 incorrect_position = True
@@ -62,6 +86,11 @@ class GameLogic:
                     # Generate a random position for the obstacle
                     x = random.randint(0, self.width - 1)
                     y = random.randint(0, self.height - 1)
+
+                    # Ensure the obstacle is not in the middle row
+                    if y == middle_row:
+                        continue
+
                     next_move = self.snake.move(self.width, self.height)
                     if ((y, x) not in self.snake.body and (y, x) not in self.board.obstacles and
                             (y, x) != next_move and (y, x) != self.food):
@@ -86,20 +115,31 @@ class GameLogic:
 
         return obstacles
 
-    def move_snake(self):
-
+    def move_snake(self, direction=None):
+        if direction:
+            self.snake.direction = direction
         new_head = self.snake.move(self.width, self.height)
-
         if new_head in self.snake.body[1:] or new_head in self.board.obstacles:
             self.game_over = True
+            store_game_result(self.nickname, self.score, self.width)
+            store_game_result_to_mongodb(self.nickname, self.score, self.width)
             return
 
         self.snake.body.insert(0, new_head)
         self.snake.head.insert(0, new_head)
         self.snake.head.pop()
 
+        if not self.food:
+            self.food = self.generate_food()
+        if not self.food:
+            self.game_over = True  # No free space available for food
+            store_game_result(self.nickname, self.score, self.width)
+            store_game_result_to_mongodb(self.nickname, self.score, self.width)
+            return
+
         if new_head == self.food:
             self.food = self.generate_food()
+            self.score += 1
             self.speed *= 1.07  # Increase speed by 7%
         else:
             self.snake.body.pop()
@@ -107,14 +147,25 @@ class GameLogic:
         # Check if the player has won the game
         if len(self.snake.body) == self.winning_condition:
             self.win_bool = True
-            print("Congratulations! You have won the game.")
             self.game_over = True
+            store_game_result(self.nickname, self.score, (self.width, self.height))
+            store_game_result_to_mongodb(self.nickname, self.score, (self.width, self.height))
+            print("Congratulations! You have won the game.")
+
+        self.update_board()
+
+        self.update_board()
 
     def update_board(self):
-        self.board = Board(self.width, self.height)
+        # Clear the board
+        self.board.grid = [[' ' for _ in range(self.width)] for _ in range(self.height)]
+
+        # Place the new state of the snake, food, and obstacles on the board
         self.board.place_snake(self.snake)
         self.board.place_food(self.food)
-
-        # Place obstacles
         for obstacle in self.obstacles:
             self.board.place_obstacles(obstacle)
+
+    def update_game(self):
+        if not self.game_over:
+            self.move_snake()
