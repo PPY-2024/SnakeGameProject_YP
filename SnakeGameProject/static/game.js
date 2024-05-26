@@ -18,10 +18,6 @@ function setCellSize(boardSize) {
 }
 
 function startGame() {
-        // Start the background music
-        const music = document.getElementById('background-music');
-        music.play();
-
     document.getElementById('endgameWindow').style.display = 'none';
 
     const nickname = document.getElementById('nickname').value;
@@ -49,6 +45,9 @@ function startGame() {
     .then(response => response.json())
 
     .then(() => {
+        // Start the background music
+        const music = document.getElementById('background-music');
+        music.play();
         updateGameView();
         document.getElementById('startingWindow').style.display = 'none';
         document.getElementById('gameWindow').style.display = 'block';
